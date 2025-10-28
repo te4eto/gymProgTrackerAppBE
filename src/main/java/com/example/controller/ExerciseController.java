@@ -13,7 +13,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/exercises")
-@CrossOrigin
+@CrossOrigin(origins = "*")
 public class ExerciseController {
 
     @Autowired
