@@ -3,9 +3,14 @@ package com.example.service;
 import com.example.model.dto.workoutSession.WorkoutSessionDTO;
 import com.example.model.entity.WorkoutSession;
 import com.example.model.entity.WorkoutSet;
+import com.example.model.entity.auth.User;
+import com.example.repository.UserRepository;
 import com.example.repository.WorkoutSessionRepository;
 import org.hibernate.Hibernate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,24 +25,62 @@ public class WorkoutSessionService {
     @Autowired
     private WorkoutSessionRepository repo;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    private User getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new RuntimeException("User not authenticated.");
+        }
+
+        String username = authentication.getName();
+
+        return userRepository.findByUsername(username)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+    }
+
+    private String getCurrentUsername() {
+        return SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
     @Transactional(readOnly = true)
     public List<WorkoutSessionDTO> getAll() {
-        List<WorkoutSession> sessions = repo.findAll();
-        sessions.forEach(session -> Hibernate.initialize(session.getSets())); // Ensure sets are loaded
+        String currentUsername = getCurrentUsername();
+
+        List<WorkoutSession> sessions = repo.findByUserUsername(currentUsername);
+
+        sessions.forEach(session -> Hibernate.initialize(session.getSets()));
         return sessions.stream().map(WorkoutSessionDTO::new).collect(Collectors.toList());
     }
 
     @Transactional
     public WorkoutSession create(WorkoutSession session) {
+        User currentUser = getCurrentUser();
+
+        session.setUser(currentUser);
+
+        if (currentUser.getSessions() == null) {
+            currentUser.setSessions(new ArrayList<>());
+        }
+        currentUser.getSessions().add(session);
+
+
         if (session.getSets() != null) {
             session.getSets().forEach(set -> set.setSession(session));
         }
+
         return repo.save(session);
     }
 
     @Transactional(readOnly = true)
     public WorkoutSession getById(Long id) {
-        WorkoutSession session = repo.findById(id).orElseThrow(() -> new RuntimeException("Session not found"));
+        String currentUsername = getCurrentUsername();
+
+        WorkoutSession session = repo.findByIdAndUserUsername(id, currentUsername)
+                .orElseThrow(() -> new RuntimeException("Session not found or forbidden"));
+
         Hibernate.initialize(session.getSets());
         return session;
     }
@@ -55,14 +98,19 @@ public class WorkoutSessionService {
                 existing.getSets().add(newSet);
             }
         }
+
+        updated.setUser(existing.getUser());
         return repo.save(existing);
     }
 
     @Transactional
     public void deleteById(Long id) {
-        if (!repo.existsById(id)) {
-            throw new RuntimeException("Session not found");
+        String currentUsername = getCurrentUsername();
+
+        if (!repo.findByIdAndUserUsername(id, currentUsername).isPresent()) {
+            throw new RuntimeException("Session not found or forbidden");
         }
+
         repo.deleteById(id);
     }
 
